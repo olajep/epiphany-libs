@@ -128,6 +128,8 @@ typedef struct {
 } e_memseg_t;
 
 
+typedef struct es_state_ es_state;
+
 typedef struct {
 	e_objtype_t      objtype;     // object type identifier
 	e_platformtype_t type;        // platform part number
@@ -146,6 +148,8 @@ typedef struct {
 
 	int              num_emems;   // number of external memory segments in platform
 	e_memseg_t      *emem;        // array of external memory segments
+
+	es_state        *esim;        // ESIM handle
 } e_platform_t;
 
 

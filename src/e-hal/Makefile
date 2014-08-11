@@ -9,12 +9,12 @@ LIBNAME			= e-hal
 #LIBVERBLD       = .0
 
 # Libraries to link with
-LIBS			= 
+LIBS			+=
 
-EXTRACFLAGS  	= -fmessage-length=0 -Wno-int-to-pointer-cast -Wno-pointer-to-int-cast
+EXTRACFLAGS  	+= -fmessage-length=0 -Wno-int-to-pointer-cast -Wno-pointer-to-int-cast
 
 # List of include search paths
-INCLUDES    = \
+INCLUDES    += \
 	-I../						\
 	-I./src						\
 	-I../e-loader/src

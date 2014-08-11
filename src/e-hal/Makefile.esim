@@ -1,0 +1,13 @@
+EXTRACFLAGS += -DESIM_BACKEND
+
+# Need to adjust these two accordingly
+LIBS ?= -L../../../epiphany-gdb/build/sim/epiphany -lesim
+INCLUDES ?= -I../../../epiphany-gdb/sim/epiphany/esim
+
+export
+
+all:
+	${MAKE} -f Makefile ${MAKECMDGOALS}
+%:
+	${MAKE} -f Makefile ${MAKECMDGOALS}
+
