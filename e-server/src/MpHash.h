@@ -99,7 +99,8 @@ public:
 	    uint16_t  instr);
   bool lookup (MpType    type,
 	       uint32_t  addr,
-	       Thread*   thread);
+	       Thread*   thread,
+	       uint16_t* instr);
   bool remove (MpType    type,
 	       uint32_t  addr,
 	       Thread*   thread,

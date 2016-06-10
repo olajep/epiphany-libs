@@ -113,11 +113,18 @@ MpHash::add (MpType    type,
 bool
 MpHash::lookup (MpType    type,
 		uint32_t  addr,
-		Thread*   thread)
+		Thread*   thread,
+		uint16_t* instr)
 {
   MpKey  key = {type, addr, thread};
-  return (mHashTab.find (key) != mHashTab.end ());
+  map <MpKey, uint16_t>::iterator it = mHashTab.find (key);
+  if (it != mHashTab.end ())
+    {
+      *instr = it->second;
+      return true;
+    }
 
+  return false;
 }	// lookup()
 
 
