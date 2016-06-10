@@ -219,9 +219,6 @@ private:
   //! Next process ID to use
   int  mNextPid;
 
-  //! Current process
-  ProcessInfo* mCurrentProcess;
-
   //! Map of thread ID to thread
   typedef map <int, Thread *> TidThreadMap;
   TidThreadMap mThreads;
@@ -296,7 +293,6 @@ private:
   string rspThreadExtraInfo (Thread* thread);
   void rspCommand ();
   void rspCmdWorkgroup (char* cmd);
-  void rspCmdProcess (char* cmd);
 
   void rspTransfer ();
   typedef string (GdbServer::* makeTransferReplyFtype) (void);
