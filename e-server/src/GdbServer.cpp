@@ -346,7 +346,7 @@ GdbServer::rspClientRequest ()
     case '?':
       // Return last signal ID
       rspReportException (*mCurrentProcess->threadBegin (),
-			  TARGET_SIGNAL_TRAP);
+			  TARGET_SIGNAL_NONE);
       break;
 
     case 'D':
@@ -472,8 +472,10 @@ GdbServer::rspReportException (Thread *thread, TargetSignal sig)
   ostringstream oss;
 
   oss << "T" << Utils::intStr (sig, 16, 2)
-      << "thread:" << hex << thread->tid ()
-      << ";";
+      << "thread:" << hex << thread->tid () << ";";
+
+  if (sig == TARGET_SIGNAL_TRAP)
+    oss << "swbreak:;";
 
   // In all-stop mode, ensure all threads are halted.
   haltAllThreads ();
@@ -1313,7 +1315,10 @@ GdbServer::rspQuery ()
       // supported as well. Note that the packet size allows for 'G' + all the
       // registers sent to us, or a reply to 'g' with all the registers and an
       // EOS so the buffer is a well formed string.
-      sprintf (pkt->data, "PacketSize=%x;qXfer:osdata:read+",
+      sprintf (pkt->data,
+	       "PacketSize=%x;"
+	       "qXfer:osdata:read+;"
+	       "swbreak+",
 	       pkt->getBufSize ());
       pkt->setLen (strlen (pkt->data));
       rsp->putPkt (pkt);
@@ -2467,7 +2472,7 @@ GdbServer::rspVCont ()
 		  && thread->lastAction () == ACTION_STOP)
 		{
 		  thread->setLastAction (action.kind);
-		  if (!thread->isPending ())
+		  if (thread->pendingSignal () == TARGET_SIGNAL_NONE)
 		    continueThread (thread);
 		  break;
 		}
@@ -2492,7 +2497,7 @@ GdbServer::waitAllThreads ()
       Thread* thread = *it;
 
       if (thread->lastAction () == ACTION_CONTINUE
-	  && thread->isPending ())
+	  && thread->pendingSignal () != TARGET_SIGNAL_NONE)
 	{
 	  doContinue (thread);
 	  return;
@@ -2524,6 +2529,7 @@ GdbServer::waitAllThreads ()
 
 	  if (thread->lastAction () == ACTION_CONTINUE && thread->isHalted ())
 	    {
+	      thread->setPendingSignal (findStopReason (thread));
 	      doContinue (thread);
 	      return;
 	    }
@@ -2593,13 +2599,14 @@ GdbServer::markPendingStops (Thread *reporting_thread)
 
       if (thread != reporting_thread
 	  && thread->lastAction () == ACTION_CONTINUE
-	  && !thread->isPending ())
+	  && thread->pendingSignal () == TARGET_SIGNAL_NONE)
 	{
 	  assert (thread->isHalted ());
 
-	  if (findStopReason (thread) != TARGET_SIGNAL_NONE)
+	  TargetSignal sig = findStopReason (thread);
+	  if (sig != TARGET_SIGNAL_NONE)
 	    {
-	      thread->setPending ();
+	      thread->setPendingSignal (sig);
 
 	      if (si->debugStopResume ())
 		cerr << "DebugStopResume: marking " << thread->tid () << " pending."
@@ -2614,7 +2621,7 @@ GdbServer::markPendingStops (Thread *reporting_thread)
 	}
     }
 
-  reporting_thread->clearPending ();
+  reporting_thread->setPendingSignal (TARGET_SIGNAL_NONE);
 
 }	// markPendingStops ()
 
@@ -2671,7 +2678,9 @@ GdbServer::doContinue (Thread* thread)
 
   assert (thread->isHalted ());
 
-  TargetSignal sig = findStopReason (thread);
+  TargetSignal sig = thread->pendingSignal ();
+
+  thread->setPendingSignal (TARGET_SIGNAL_NONE);
 
   // If it was a syscall, then do the relevant F packet return.
   if (sig == TARGET_SIGNAL_EMT)
@@ -2727,6 +2736,7 @@ GdbServer::TargetSignal
 GdbServer::findStopReason (Thread *thread)
 {
   assert (thread->isHalted ());
+  assert (thread->pendingSignal () == TARGET_SIGNAL_NONE);
 
   // First see if we just hit a breakpoint or IDLE. Fortunately IDLE, BREAK,
   // TRAP and NOP are all 16-bit instructions.
@@ -2734,7 +2744,11 @@ GdbServer::findStopReason (Thread *thread)
   uint16_t instr16 = thread->readMem16 (pc);
 
   if (instr16 == BKPT_INSTR)
-    return TARGET_SIGNAL_TRAP;
+    {
+      // Decrement PC ourselves -- we support the "T05 swbreak" stop reason.
+      thread->writePc (pc);
+      return TARGET_SIGNAL_TRAP;
+    }
 
   TargetSignal sig = thread->getException ();
 
@@ -3204,7 +3218,7 @@ GdbServer::resumeAllThreads ()
       Thread* thread = *it;
 
       if (thread->lastAction () == ACTION_CONTINUE
-	  && !thread->isPending ())
+	  && thread->pendingSignal () == TARGET_SIGNAL_NONE)
 	allResumed &= thread->resume ();
     }
 
