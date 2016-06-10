@@ -213,6 +213,9 @@ private:
   //! meaning "any thread", since we immediately just pick a thread.
   Thread* mCurrentThread;
 
+  //! Indicate if we are in the middle of a notification sequence.
+  bool mNotifyingP;
+
   //! Local pointer to server info
   ServerInfo *si;
 
@@ -243,6 +246,7 @@ private:
 
   // Helper functions for setting up a connection
   void initProcesses ();
+  bool haltAndActivateProcess (ProcessInfo *process);
   void rspAttach (int  pid);
   void rspDetach (int pid);
 
@@ -250,6 +254,8 @@ private:
   void rspClientRequest ();
 
   // Handle the various RSP requests
+  void rspStatus ();
+  string rspPrepareStopReply (Thread *thread, TargetSignal sig);
   void rspReportException (Thread* thread, TargetSignal sig);
   void rspReadAllRegs ();
   void rspWriteAllRegs ();
@@ -285,6 +291,9 @@ private:
   void markAllStopped ();
   void continueThread (Thread* thread);
   void doContinue (Thread* thread);
+  Thread* findStoppedThread ();
+  void rspClientNotifications ();
+  void rspVStopped ();
   TargetSignal findStopReason (Thread *thread);
   uint16_t  getStopInstr (Thread* thread);
   void rspWriteMemBin ();
