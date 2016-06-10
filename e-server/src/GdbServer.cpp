@@ -88,7 +88,7 @@ using std::vector;
 //! @param[in] _si   All the information about the server.
 GdbServer::GdbServer (ServerInfo* _si) :
   mDebugMode (ALL_STOP),
-  currentGTid (0),
+  mCurrentThread (NULL),
   si (_si),
   fTargetControl (NULL)
 {
@@ -141,7 +141,7 @@ GdbServer::rspServer (TargetControl* _fTargetControl)
 
 	      // All-stop mode requires we halt on attaching. This will return
 	      // the appropriate stop packet.
-	      rspAttach (currentPid);
+	      rspAttach (mCurrentProcess->pid ());
 	    }
 	}
 
@@ -186,11 +186,9 @@ GdbServer::initProcesses ()
   assert (fTargetControl);		// Just in case of a stupid connection
 
   // Create the idle process
-  mIdleProcess = new ProcessInfo;
   mNextPid = IDLE_PID;
-  pair <int, ProcessInfo *> entry (mNextPid, mIdleProcess);
-  bool res = mProcesses.insert (entry).second;
-  assert (res);
+  mIdleProcess = new ProcessInfo (mNextPid);
+  mProcesses[mNextPid] = mIdleProcess;
   mNextPid++;
 
   // Initialize a thread for each core. A thread is referenced by its thread
@@ -198,22 +196,23 @@ GdbServer::initProcesses ()
   // reverse map, to allow us to gte from core to thread ID if we ever need to
   // in the future.
   for (vector <CoreId>::iterator it = fTargetControl->coreIdBegin ();
-       it!= fTargetControl->coreIdEnd ();
+       it != fTargetControl->coreIdEnd ();
        it++)
     {
+      bool res;
       CoreId coreId = *it;
       int tid = (coreId.row () + 1) * 100 + coreId.col () + 1;
-      Thread *thread = new Thread (coreId, fTargetControl, si);
+      Thread* thread = new Thread (coreId, fTargetControl, si, tid);
 
       mThreads[tid] = thread;
       mCore2Tid [coreId] = tid;
 
       // Add to idle process
-      res = mIdleProcess->addThread (tid);
+      res = mIdleProcess->addThread (thread);
       assert (res);
     }
 
-  currentPid = IDLE_PID;
+  mCurrentProcess = mIdleProcess;
 
 }	// initProcesses ()
 
@@ -238,12 +237,11 @@ GdbServer::rspAttach (int  pid)
   ProcessInfo* process = it->second;
   bool isHalted = true;
 
-  for (set <int>::iterator it = process->threadBegin ();
+  for (set <Thread*>::iterator it = process->threadBegin ();
        it != process->threadEnd ();
        it++)
     {
-      int tid = *it;
-      Thread *thread = getThread (tid);
+      Thread* thread = *it;
       isHalted &= thread->halt ();
 
       if (thread->isIdle ())
@@ -251,13 +249,13 @@ GdbServer::rspAttach (int  pid)
 	  if (thread->activate ())
 	    {
 	      if (si->debugStopResumeDetail ())
-		cerr << "DebugStopResumeDetail: Thread " << tid
+		cerr << "DebugStopResumeDetail: Thread " << thread->tid ()
 		     << " idle on attach: forced active." << endl;
 	    }
 	  else
 	    {
 	      if (si->debugStopResumeDetail ())
-		cerr << "DebugStopResumeDetail: Thread " << tid
+		cerr << "DebugStopResumeDetail: Thread " << thread->tid ()
 		     << " idle on attach: failed to force active." << endl;
 	    }
 	}
@@ -283,15 +281,13 @@ GdbServer::rspDetach (int pid)
 {
   if (IDLE_PID != pid)
     {
-      map <int, ProcessInfo *>::iterator  it = mProcesses.find (pid);
-      assert (it != mProcesses.end ());
-      ProcessInfo* process = it->second;
+      ProcessInfo* process = getProcess (pid);
 
-      for (set <int>::iterator it = process->threadBegin ();
+      for (set <Thread*>::iterator it = process->threadBegin ();
 	   it != process->threadEnd ();
 	   it++)
 	{
-	  Thread* thread = getThread (*it);
+	  Thread* thread = *it;
 	  thread->resume ();
 	}
     }
@@ -329,7 +325,7 @@ GdbServer::rspClientRequest ()
 {
   if (!rsp->getPkt (pkt))
     {
-      rspDetach (currentPid);
+      rspDetach (mCurrentProcess->pid ());
       rsp->rspClose ();		// Comms failure
       return;
     }
@@ -350,7 +346,7 @@ GdbServer::rspClientRequest ()
     case 'D':
       // Detach GDB. Do this by closing the client. The rules say that
       // execution should continue, so unstall the processor.
-      rspDetach (currentPid);
+      rspDetach (mCurrentProcess->pid ());
       pkt->packStr ("OK");
       rsp->putPkt (pkt);
       rsp->rspClose ();
@@ -380,7 +376,7 @@ GdbServer::rspClientRequest ()
       break;
 
     case 'k':
-      rspDetach (currentPid);
+      rspDetach (mCurrentProcess->pid ());
       rsp->rspClose ();			// Close the connection.
 
       break;
@@ -534,7 +530,7 @@ GdbServer::rspSuspend ()
 void
 GdbServer::rspFileIOreply ()
 {
-  Thread* thread = getThread (currentGTid);
+  Thread* thread = mCurrentThread;
 
   long int result_io = -1;
   long int host_respond_error_code;
@@ -906,7 +902,8 @@ GdbServer::hostWrite (const char* intro,
 void
 GdbServer::rspReadAllRegs ()
 {
-  Thread *thread = getThread (currentGTid);
+  assert (mCurrentThread != NULL);
+
   // Start timing if debugging
   if (si->debugStopResumeDetail ())
     fTargetControl->startOfBaudMeasurement ();
@@ -918,7 +915,7 @@ GdbServer::rspReadAllRegs ()
       unsigned int pktOffset = r * TargetControl::E_REG_BYTES * 2;
 
       // Not all registers are necessarily supported.
-      if (thread->readReg (r, val))
+      if (mCurrentThread->readReg (r, val))
 	Utils::reg2Hex (val, &(pkt->data[pktOffset]));
       else
 	for (unsigned int i = 0; i < TargetControl::E_REG_BYTES * 2; i++)
@@ -959,10 +956,11 @@ GdbServer::rspReadAllRegs ()
 void
 GdbServer::rspWriteAllRegs ()
 {
-  Thread* thread = getThread (currentGTid);
+  assert (mCurrentThread != NULL);
+
   // All registers
   for (unsigned int r = 0; r < NUM_REGS; r++)
-      (void) thread->writeReg (r, Utils::hex2Reg (&(pkt->data[r * 8])));
+      (void) mCurrentThread->writeReg (r, Utils::hex2Reg (&(pkt->data[r * 8])));
 
   // Acknowledge (always OK for now).
   pkt->packStr ("OK");
@@ -983,6 +981,7 @@ GdbServer::rspSetThread ()
 {
   char  c;
   int  tid;
+  Thread* thread;
 
   if (pkt->data[0] != 'H' || pkt->data[1] != 'g')
     {
@@ -999,10 +998,12 @@ GdbServer::rspSetThread ()
       return;
     }
 
-  if (0 == tid)
-    tid = *(getProcess (currentPid)->threadBegin ());
+  if (tid == 0)
+    thread = *(mCurrentProcess->threadBegin ());
+  else
+    thread = getThread (tid);
 
-  currentGTid = tid;
+  mCurrentThread = thread;
 
   pkt->packStr ("OK");
   rsp->putPkt (pkt);
@@ -1030,10 +1031,11 @@ GdbServer::rspSetThread ()
 void
 GdbServer::rspReadMem ()
 {
-  Thread *thread = getThread (currentGTid);
   unsigned int addr;		// Where to read the memory
   int len;			// Number of bytes to read
   int off;			// Offset into the memory
+
+  assert (mCurrentThread != NULL);
 
   if (2 != sscanf (pkt->data, "m%x,%x:", &addr, &len))
     {
@@ -1064,7 +1066,7 @@ GdbServer::rspReadMem ()
     char buf[len];
 
     bool retReadOp =
-      thread->readMemBlock (addr, (unsigned char *) buf, len);
+      mCurrentThread->readMemBlock (addr, (unsigned char *) buf, len);
 
     if (!retReadOp)
       {
@@ -1116,9 +1118,10 @@ GdbServer::rspReadMem ()
 void
 GdbServer::rspWriteMem ()
 {
-  Thread *thread = getThread (currentGTid);
   uint32_t addr;		// Where to write the memory
   int len;			// Number of bytes to write
+
+  assert (NULL != mCurrentThread);
 
   if (2 != sscanf (pkt->data, "M%x,%x:", &addr, &len))
     {
@@ -1146,7 +1149,7 @@ GdbServer::rspWriteMem ()
   // Write the bytes to memory
   {
     //cerr << "rspWriteMem" << hex << addr << dec << " (" << len << ")" << endl;
-    if (!thread->writeMemBlock (addr, (unsigned char *) symDat, len))
+    if (!mCurrentThread->writeMemBlock (addr, (unsigned char *) symDat, len))
       {
 	pkt->packStr ("E01");
 	rsp->putPkt (pkt);
@@ -1172,7 +1175,8 @@ GdbServer::rspWriteMem ()
 void
 GdbServer::rspReadReg ()
 {
-  Thread *thread = getThread (currentGTid);
+  assert (mCurrentThread != NULL);
+
   unsigned int regnum;
   uint32_t regval;
 
@@ -1192,7 +1196,7 @@ GdbServer::rspReadReg ()
     }
 
   // Get the relevant register
-  if (!thread->readReg (regnum, regval))
+  if (!mCurrentThread->readReg (regnum, regval))
     {
       pkt->packStr ("E03");
       rsp->putPkt (pkt);
@@ -1217,7 +1221,8 @@ GdbServer::rspReadReg ()
 void
 GdbServer::rspWriteReg ()
 {
-  Thread *thread = getThread (currentGTid);
+  assert (mCurrentThread != NULL);
+
   unsigned int regnum;
   char valstr[9];		// Allow for EOS on the string
 
@@ -1237,7 +1242,7 @@ GdbServer::rspWriteReg ()
     }
 
   // Set the relevant register
-  if (! thread->writeReg (regnum, Utils::hex2Reg (valstr)))
+  if (!mCurrentThread->writeReg (regnum, Utils::hex2Reg (valstr)))
     {
       pkt->packStr ("E03");
       rsp->putPkt (pkt);
@@ -1260,11 +1265,11 @@ GdbServer::rspQuery ()
 
   if (0 == strcmp ("qC", pkt->data))
     {
-      // Return the current thread ID (unsigned hex). A null response
-      // indicates to use the previously selected thread. We use the G thread,
-      // since C thread should be handled by vCont anyway.
+      // Return the current thread ID (unsigned hex).
 
-      sprintf (pkt->data, "QC%x", currentGTid);
+      if (mCurrentThread == NULL)
+	mCurrentThread = *mCurrentProcess->threadBegin ();
+      sprintf (pkt->data, "QC%x", mCurrentThread->tid ());
       pkt->setLen (strlen (pkt->data));
       rsp->putPkt (pkt);
     }
@@ -1343,17 +1348,16 @@ GdbServer::rspQThreadInfo (bool isFirst)
   if (isFirst)
     {
       ostringstream  os;
-      ProcessInfo *process = getProcess (currentPid);
 
       // Iterate all the threads in the core
-      for (set <int>::iterator tit = process->threadBegin ();
-	   tit != process->threadEnd ();
-	   tit++)
+      for (set <Thread*>::iterator it = mCurrentProcess->threadBegin ();
+	   it != mCurrentProcess->threadEnd ();
+	   it++)
 	{
-	  if (tit != process->threadBegin ())
+	  if (it != mCurrentProcess->threadBegin ())
 	    os << ",";
 
-	  os << hex << *tit;
+	  os << hex << (*it)->tid ();
 	}
 
       string reply = os.str ();
@@ -1478,8 +1482,7 @@ GdbServer::rspCommand ()
     }
   else if (strcmp ("coreid", cmd) == 0)
     {
-      Thread* gThread = getThread (currentGTid);
-      CoreId absGCoreId = gThread->readCoreId ();
+      CoreId absGCoreId = mCurrentThread->readCoreId ();
       CoreId relGCoreId = fTargetControl->abs2rel (absGCoreId);
       ostringstream  oss;
 
@@ -1597,40 +1600,33 @@ GdbServer::rspCmdWorkgroup (char* cmd)
     }
 
   // We can only accept a group whose cores are all in the idle group.
-  ProcessInfo *process = new ProcessInfo;
   int pid = mNextPid;
-  pair <int, ProcessInfo *> entry (pid, process);
-  bool res = mProcesses.insert (entry).second;
-  assert (res);
-  mNextPid++;
+  ProcessInfo *process = new ProcessInfo (pid);
 
   for (unsigned int r = 0; r < rows; r++)
     for (unsigned int c = 0; c < cols; c++)
       {
 	CoreId coreId (row + r, col + c);
-	int thread = mCore2Tid[coreId];
+	Thread* thread = mThreads[mCore2Tid[coreId]];
 	if (mIdleProcess->eraseThread (thread))
 	  {
-	    res = process->addThread (thread);
+	    bool res = process->addThread (thread);
 	    assert (res);
 	  }
 	else
 	  {
 	    // Yuk - blew up half way. Put all the threads back into the idle
 	    // group, delete the process an give up.
-	    for (set <int>::iterator it = process->threadBegin ();
+	    for (set <Thread*>::iterator it = process->threadBegin ();
 		 it != process->threadEnd ();
 		 it++)
 	      {
-		res = process->eraseThread (*it);
+		bool res = process->eraseThread (*it);
 		assert (res);
 		res = mIdleProcess->addThread (*it);
 		assert (res);
 	      }
 
-	    --mNextPid;
-	    int numRes = mProcesses.erase (mNextPid);
-	    assert (numRes == 1);
 	    delete process;
 
 	    cerr << "Warning: failed to add thread " << thread
@@ -1643,6 +1639,9 @@ GdbServer::rspCmdWorkgroup (char* cmd)
 	    return;
 	  }
       }
+
+  mProcesses[pid] = process;
+  mNextPid++;
 
   ostringstream oss;
   oss << "New workgroup process ID " << pid << endl;
@@ -1699,8 +1698,7 @@ GdbServer::rspCmdProcess (char* cmd)
     }
   else
     {
-      currentPid = pid;
-      ProcessInfo *process = getProcess (pid);
+      mCurrentProcess = mProcesses[pid];
 
       ostringstream oss;
       oss << "Process ID now " << pid << "." << endl;
@@ -1709,10 +1707,12 @@ GdbServer::rspCmdProcess (char* cmd)
       // it.  This is really a big dodgy - ultimately this needs
       // proper process handling.
 
-      if ((-1 != currentGTid) && (! process->hasThread (currentGTid)))
+      if ((NULL != mCurrentThread)
+	  && (! mCurrentProcess->hasThread (mCurrentThread)))
 	{
-	  currentGTid = *(process->threadBegin ());
-	  oss << "- switching general thread to " << currentGTid << "." << endl;
+	  mCurrentThread = *(mCurrentProcess->threadBegin ());
+	  oss << "- switching general thread to " << mCurrentThread << "."
+	      << endl;
 	  pkt->packHexstr (oss.str ().c_str ());
 	  rsp->putPkt (pkt);
 	}
@@ -1943,40 +1943,34 @@ GdbServer::rspOsDataProcesses (unsigned int offset,
 	"<!DOCTYPE target SYSTEM \"osdata.dtd\">\n"
 	"<osdata type=\"processes\">\n";
 
-      // Iterate through all processes. We need to temporarily make each
-      // process the "current" process
-      int oldCurrentPid = currentPid;
+      // Iterate through all processes.
       for (map <int, ProcessInfo *>::iterator pit = mProcesses.begin ();
 	   pit != mProcesses.end ();
 	   pit++)
 	{
-	  currentPid = pit->first;
 	  ProcessInfo *process = pit->second;
 	  osProcessReply += "  <item>\n"
 	    "    <column name=\"pid\">";
-	  osProcessReply += Utils::intStr (currentPid);
+	  osProcessReply += Utils::intStr (process->pid ());
 	  osProcessReply += "</column>\n"
 	    "    <column name=\"user\">root</column>\n"
 	    "    <column name=\"command\"></column>\n"
 	    "    <column name=\"cores\">\n"
 	    "      ";
 
-	  for (set <int>::iterator tit = process->threadBegin ();
+	  for (set <Thread*>::iterator tit = process->threadBegin ();
 	       tit != process->threadEnd (); tit++)
 	    {
-	      Thread* thread = getThread (*tit);
-
 	      if (tit != process->threadBegin ())
 		osProcessReply += ",";
 
-	      osProcessReply += thread->coreId ();
+	      osProcessReply += (*tit)->coreId ();
 	    }
 
 	  osProcessReply += "\n"
 	    "    </column>\n"
 	    "  </item>\n";
 	}
-      currentPid = oldCurrentPid;	// Restored
       osProcessReply += "</osdata>";
     }
 
@@ -2255,8 +2249,7 @@ GdbServer::rspSet ()
 void
 GdbServer::rspRestart ()
 {
-  Thread* thread = getThread (currentGTid);
-  thread->writePc (0);
+  mCurrentThread->writePc (0);
 
 }				// rspRestart()
 
@@ -2285,9 +2278,7 @@ GdbServer::rspIsThreadAlive ()
 
   // This will not find thread IDs 0 (any) or -1 (all), which seems to be what
   // we want.
-  ProcessInfo *process = getProcess (currentPid);
-
-  if (process->hasThread (tid))
+  if (mCurrentProcess->hasThread (mThreads[tid]))
     pkt->packStr ("OK");
   else
     pkt->packStr ("E01");
@@ -2387,7 +2378,7 @@ GdbServer::rspVpkt ()
 void
 GdbServer::rspVCont ()
 {
-  ProcessInfo *process = getProcess (currentPid);
+  ProcessInfo *process = mCurrentProcess;
   vContTidActionVector threadActions;
 
   stringstream    ss (pkt->data);
@@ -2445,11 +2436,11 @@ GdbServer::rspVCont ()
   // 2. Otherwise report the first stopped thread.
 
   // Continue any thread without a pendingStop to deal with.
-  for (set <int>::iterator it = process->threadBegin ();
+  for (set <Thread*>::iterator it = process->threadBegin ();
        it != process->threadEnd ();
        it++)
     {
-      int tid = *it;
+      Thread* thread = *it;
 
       for (vContTidActionVector::const_iterator act_it = threadActions.begin ();
 	   act_it != threadActions.end ();
@@ -2457,11 +2448,12 @@ GdbServer::rspVCont ()
 	{
 	  const vContTidAction &action = *act_it;
 
-	  if (action.matches (tid))
+	  if (action.matches (thread->tid ()))
 	    {
-	      if (action.kind == ACTION_CONTINUE && !pendingStop (tid))
+	      if (action.kind == ACTION_CONTINUE
+		  && !pendingStop (thread->tid ()))
 		{
-		  continueThread (tid);
+		  continueThread (thread);
 		  break;
 		}
 	    }
@@ -2469,11 +2461,11 @@ GdbServer::rspVCont ()
     }
 
   // Deal with any pending stops before looking for new ones.
-  for (set <int>::iterator it = process->threadBegin ();
+  for (set <Thread*>::iterator it = process->threadBegin ();
        it != process->threadEnd ();
        it++)
     {
-      int tid = *it;
+      Thread* thread = *it;
 
       for (vContTidActionVector::const_iterator act_it = threadActions.begin ();
 	   act_it != threadActions.end ();
@@ -2481,13 +2473,14 @@ GdbServer::rspVCont ()
 	{
 	  const vContTidAction &action = *act_it;
 
-	  if (action.matches (tid))
+	  if (action.matches (thread->tid ()))
 	    {
-	      if (action.kind == ACTION_CONTINUE && pendingStop (tid))
+	      if (action.kind == ACTION_CONTINUE
+		  && pendingStop (thread->tid ()))
 		{
-		  continueThread (tid);
-		  doContinue (tid);
-		  markPendingStops (process, tid);
+		  continueThread (thread);
+		  doContinue (thread);
+		  markPendingStops (process, thread);
 		  return;
 		}
 	    }
@@ -2497,11 +2490,11 @@ GdbServer::rspVCont ()
   // We must wait until a thread halts.
   while (true)
     {
-      for (set <int>::iterator it = process->threadBegin ();
+      for (set <Thread*>::iterator it = process->threadBegin ();
 	   it != process->threadEnd ();
 	   it++)
 	{
-	  int tid = *it;
+	  Thread* thread = *it;
 
 	  for (vContTidActionVector::const_iterator act_it = threadActions.begin ();
 	       act_it != threadActions.end ();
@@ -2509,14 +2502,12 @@ GdbServer::rspVCont ()
 	    {
 	      const vContTidAction &action = *act_it;
 
-	      if (action.matches (tid))
+	      if (action.matches (thread->tid ()))
 		{
-		  Thread *thread = getThread (tid);
-
 		  if (action.kind == ACTION_CONTINUE && thread->isHalted ())
 		    {
-		      doContinue (tid);
-		      markPendingStops (process, tid);
+		      doContinue (thread);
+		      markPendingStops (process, thread);
 		      return;
 		    }
 		}
@@ -2609,16 +2600,17 @@ GdbServer::pendingStop (int  tid)
 //! @param[in] tid      The thread ID xto clear pending stop for.
 //-----------------------------------------------------------------------------
 void
-GdbServer::markPendingStops (ProcessInfo* process,
-			     int          tid)
+GdbServer::markPendingStops (ProcessInfo* process, Thread *reporting_thread)
 {
-  for (set <int>::iterator it = process->threadBegin ();
+  for (set <Thread*>::iterator it = process->threadBegin ();
        it != process->threadEnd ();
        it++)
-    if ((*it != tid) && (BKPT_INSTR == getStopInstr (getThread (*it))))
-      mPendingStops.insert (*it);
+    {
+      if ((*it != reporting_thread) && (BKPT_INSTR == getStopInstr (*it)))
+	mPendingStops.insert ((*it)->tid ());
+    }
 
-  removePendingStop (tid);
+  removePendingStop (reporting_thread->tid ());
 
 }	// markPendingStops ()
 
@@ -2644,18 +2636,13 @@ GdbServer::removePendingStop (int  tid)
 //! This is only half of continue processing - we'll worry about the thread
 //! stopping later.
 
-//! @param[in] tid  The thread ID to continue.
-//! @param[in] sig  The exception to use. Defaults to
-//!                 TARGET_SIGNAL_NONE.  Currently ignored
+//! @param[in] thread  The thread to continue.
 //-----------------------------------------------------------------------------
 void
-GdbServer::continueThread (int       tid,
-			   uint32_t  sig)
+GdbServer::continueThread (Thread* thread)
 {
-  Thread* thread = getThread (tid);
-
   if (si->debugStopResume ())
-    cerr << "DebugStopResume: continueThread (" << tid << ", " << sig << ")."
+    cerr << "DebugStopResume: continueThread (" << thread->tid () << ")."
 	 << endl;
 
   thread->resume ();
@@ -2668,12 +2655,10 @@ GdbServer::continueThread (int       tid,
 //! @param[in] tid  The thread ID which stopped.
 //-----------------------------------------------------------------------------
 void
-GdbServer::doContinue (int  tid)
+GdbServer::doContinue (Thread* thread)
 {
-  Thread* thread = getThread (tid);
-
   if (si->debugStopResume ())
-    cerr << "DebugStopResume: doContinue (" << tid << ")." << endl;
+    cerr << "DebugStopResume: doContinue (" << thread->tid () << ")." << endl;
 
   // If it was a trap, then do the relevant F packet return.
   if (doFileIO (thread))
@@ -2684,7 +2669,7 @@ GdbServer::doContinue (int  tid)
       // If no signal flags are set, this must be a breakpoint.
       if (TARGET_SIGNAL_NONE == sig)
 	sig = TARGET_SIGNAL_TRAP;
-      rspReportException (tid, sig);
+      rspReportException (thread->tid (), sig);
     }
 }	// doContinue ()
 
@@ -2787,7 +2772,7 @@ GdbServer::doFileIO (Thread* thread)
 void
 GdbServer::rspWriteMemBin ()
 {
-  Thread *thread = getThread (currentGTid);
+  Thread* thread = mCurrentThread;
 
   uint32_t addr;		// Where to write the memory
   int len;			// Number of bytes to write
@@ -2893,25 +2878,24 @@ GdbServer::rspRemoveMatchpoint ()
       if (fTargetControl->isLocalAddr (addr))
 	{
 	  // Local memory we need to remove in all cores.
-	  ProcessInfo *process = getProcess (currentPid);
+	  ProcessInfo *process = mCurrentProcess;
 
-	  for (set <int>::iterator it = process->threadBegin ();
+	  for (set <Thread*>::iterator it = process->threadBegin ();
 	       it != process->threadEnd ();
 	       it++)
 	    {
-	      int tid = *it;
-	      Thread *thread = getThread (tid);
+	      Thread* thread = *it;
 
-	      if (mpHash->remove (type, addr, tid, &instr))
+	      if (mpHash->remove (type, addr, thread, &instr))
 		thread->writeMem16 (addr, instr);
 	    }
 	}
       else
 	{
 	  // Shared memory we only need to remove once.
-	  Thread* thread = getThread (currentGTid);
+	  Thread* thread = mCurrentThread;
 
-	  if (mpHash->remove (type, addr, currentGTid, &instr))
+	  if (mpHash->remove (type, addr, thread, &instr))
 	    thread->writeMem16 (addr, instr);
 	}
 
@@ -2980,28 +2964,26 @@ GdbServer::rspInsertMatchpoint ()
       if (fTargetControl->isLocalAddr (addr))
 	{
 	  // Local memory we need to insert in all cores.
-	  ProcessInfo *process = getProcess (currentPid);
+	  ProcessInfo *process = mCurrentProcess;
 
-	  for (set <int>::iterator it = process->threadBegin ();
+	  for (set <Thread*>::iterator it = process->threadBegin ();
 	       it != process->threadEnd ();
 	       it++)
 	    {
-	      int tid = *it;
-	      Thread *thread = getThread (tid);
+	      Thread* thread = *it;
 
 	      thread->readMem16 (addr, bpMemVal);
-	      mpHash->add (type, addr, tid, bpMemVal);
-
+	      mpHash->add (type, addr, thread, bpMemVal);
 	      thread->insertBkptInstr (addr);
 	    }
 	}
       else
 	{
 	  // Shared memory we only need to insert once.
-	  Thread* thread = getThread (currentGTid);
+	  Thread* thread = mCurrentThread;
 
 	  thread->readMem16 (addr, bpMemVal);
-	  mpHash->add (type, addr, currentGTid, bpMemVal);
+	  mpHash->add (type, addr, thread, bpMemVal);
 
 	  thread->insertBkptInstr (addr);
 	}
@@ -3030,7 +3012,7 @@ GdbServer::rspInsertMatchpoint ()
 void
 GdbServer::targetSwReset ()
 {
-  Thread* thread = getThread (currentGTid);
+  Thread* thread = mCurrentThread;
 
   for (unsigned ncyclesReset = 0; ncyclesReset < 12; ncyclesReset++)
     (void) thread->writeReg (RESETCORE_REGNUM, 1);
@@ -3097,14 +3079,14 @@ GdbServer::getThread (int tid)
 bool
 GdbServer::haltAllThreads ()
 {
-  ProcessInfo *process = getProcess (currentPid);
+  ProcessInfo *process = mCurrentProcess;
   bool allHalted = true;
 
-  for (set <int>::iterator it = process->threadBegin ();
+  for (set <Thread*>::iterator it = process->threadBegin ();
        it != process->threadEnd ();
        it++)
     {
-      Thread* thread = getThread (*it);
+      Thread* thread = *it;
       allHalted &= thread->halt ();
     }
 
@@ -3121,14 +3103,14 @@ GdbServer::haltAllThreads ()
 bool
 GdbServer::resumeAllThreads ()
 {
-  ProcessInfo *process = getProcess (currentPid);
+  ProcessInfo *process = mCurrentProcess;
   bool allResumed = true;
 
-  for (set <int>::iterator it = process->threadBegin ();
+  for (set <Thread*>::iterator it = process->threadBegin ();
        it != process->threadEnd ();
        it++)
     {
-      Thread* thread = getThread (*it);
+      Thread* thread = *it;
       allResumed &= thread->resume ();
     }
 

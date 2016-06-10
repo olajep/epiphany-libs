@@ -50,10 +50,12 @@ using std::endl;
 //-----------------------------------------------------------------------------
 Thread::Thread (CoreId         coreId,
 		TargetControl* target,
-		ServerInfo*    si) :
+		ServerInfo*    si,
+		int            tid) :
   mCoreId (coreId),
   mTarget (target),
   mSi (si),
+  mTid (tid),
   mDebugState (DEBUG_RUNNING),
   mRunState (RUN_UNKNOWN)
 {
@@ -99,6 +101,19 @@ Thread::coreId () const
   return  mCoreId;
 
 }	// coreId ()
+
+
+//-----------------------------------------------------------------------------
+//! Get the thread ID
+
+//! @return  The thread ID
+//-----------------------------------------------------------------------------
+int
+Thread::tid () const
+{
+  return mTid;
+
+}	// tid ()
 
 
 //-----------------------------------------------------------------------------
