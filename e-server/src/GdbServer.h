@@ -209,9 +209,6 @@ private:
   //! meaning "any thread", since we immediately just pick a thread.
   Thread* mCurrentThread;
 
-  //! Set of thread IDs with pending stops
-  set <int> mPendingStops;
-
   //! Local pointer to server info
   ServerInfo *si;
 
@@ -280,9 +277,8 @@ private:
   void rspVCont ();
   vContAction extractVContAction (const string &action);
   bool pendingStop (int  tid);
-  void markPendingStops (ProcessInfo* process,
-			 Thread *reporting_thread);
-  void removePendingStop (int  tid);
+  void markPendingStops (Thread *reporting_thread);
+  void markAllStopped ();
   void continueThread (Thread* thread);
   void doContinue (Thread* thread);
   uint16_t  getStopInstr (Thread* thread);
@@ -291,7 +287,7 @@ private:
   void rspRemoveMatchpoint ();
   void rspInsertMatchpoint ();
   void rspFileIOreply ();
-  void rspSuspend (const vContTidActionVector &threadActions);
+  void rspSuspend ();
 
   // Convenience functions to control and report on the CPU
   void targetSwReset ();

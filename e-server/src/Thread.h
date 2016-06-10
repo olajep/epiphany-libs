@@ -68,6 +68,13 @@ public:
   bool  isIdle ();
   bool  isInterruptible () const;
 
+  bool  isPending () const { return mPending; }
+  void  setPending () { mPending = true; }
+  void  clearPending () { mPending = false; }
+
+  void setLastAction (GdbServer::vContAction last) { mLastAction = last; }
+  GdbServer::vContAction lastAction () const { return mLastAction; }
+
   // Control of the thread
   bool  halt ();
   bool  resume ();
@@ -153,6 +160,11 @@ private:
       DEBUG_HALTED
     } mDebugState;
 
+  //! The last vCont action applied to this thread.  Once the thread
+  //! stops and the stop is reported to the client, this is set to
+  //! ACTION_STOP.
+  GdbServer::vContAction mLastAction;
+
   //! Our run state
   enum
     {
@@ -160,6 +172,9 @@ private:
       RUN_ACTIVE,
       RUN_IDLE
     } mRunState;
+
+  //! Whether our stop state has been reported to the client.
+  bool mPending;
 
   // Helper routines for target access
   uint32_t regAddr (unsigned int  regnum) const;

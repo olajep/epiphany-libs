@@ -267,6 +267,9 @@ GdbServer::rspAttach (int  pid)
   if (!isHalted)
     rspReportException (thread, TARGET_SIGNAL_HUP);
 
+  // At this point, no thread should be resumed until the client
+  // tells us to.
+  markAllStopped ();
 }	// rspAttach ()
 
 
@@ -473,6 +476,8 @@ GdbServer::rspReportException (Thread *thread, TargetSignal sig)
   // In all-stop mode, ensure all threads are halted.
   haltAllThreads ();
 
+  markPendingStops (thread);
+
   pkt->packStr (oss.str ().c_str ());
   rsp->putPkt (pkt);
 
@@ -487,7 +492,7 @@ GdbServer::rspReportException (Thread *thread, TargetSignal sig)
 //! @todo Should we see if we have an actual interrupt?
 //-----------------------------------------------------------------------------
 void
-GdbServer::rspSuspend (const vContTidActionVector &threadActions)
+GdbServer::rspSuspend ()
 {
   // Halt all threads.
   if (!haltAllThreads ())
@@ -503,20 +508,10 @@ GdbServer::rspSuspend (const vContTidActionVector &threadActions)
     {
       Thread* thread = *it;
 
-      for (vContTidActionVector::const_iterator act_it = threadActions.begin ();
-	   act_it != threadActions.end ();
-	   ++act_it)
+      if (thread->lastAction () == ACTION_CONTINUE)
 	{
-	  struct vContTidAction action = *act_it;
-
-	  if (action.matches (thread->tid ())
-	      && action.kind == ACTION_CONTINUE)
-	    {
-	      signal_thread = thread;
-	      break;
-	    }
-	  if (signal_thread != NULL)
-	    break;
+	  signal_thread = thread;
+	  break;
 	}
     }
 
@@ -528,6 +523,9 @@ GdbServer::rspSuspend (const vContTidActionVector &threadActions)
 
   rspReportException (signal_thread, TARGET_SIGNAL_HUP);
 
+  // At this point, no thread should be resumed until the client
+  // tells us to.
+  markAllStopped ();
 }	// rspSuspend ()
 
 
@@ -2467,9 +2465,11 @@ GdbServer::rspVCont ()
 	  if (action.matches (thread->tid ()))
 	    {
 	      if (action.kind == ACTION_CONTINUE
-		  && !pendingStop (thread->tid ()))
+		  && thread->lastAction () == ACTION_STOP)
 		{
-		  continueThread (thread);
+		  thread->setLastAction (action.kind);
+		  if (!thread->isPending ())
+		    continueThread (thread);
 		  break;
 		}
 	    }
@@ -2483,23 +2483,11 @@ GdbServer::rspVCont ()
     {
       Thread* thread = *it;
 
-      for (vContTidActionVector::const_iterator act_it = threadActions.begin ();
-	   act_it != threadActions.end ();
-	   ++act_it)
+      if (thread->lastAction () == ACTION_CONTINUE
+	  && thread->isPending ())
 	{
-	  const vContTidAction &action = *act_it;
-
-	  if (action.matches (thread->tid ()))
-	    {
-	      if (action.kind == ACTION_CONTINUE
-		  && pendingStop (thread->tid ()))
-		{
-		  continueThread (thread);
-		  doContinue (thread);
-		  markPendingStops (process, thread);
-		  return;
-		}
-	    }
+	  doContinue (thread);
+	  return;
 	}
     }
 
@@ -2512,21 +2500,10 @@ GdbServer::rspVCont ()
 	{
 	  Thread* thread = *it;
 
-	  for (vContTidActionVector::const_iterator act_it = threadActions.begin ();
-	       act_it != threadActions.end ();
-	       ++act_it)
+	  if (thread->lastAction () == ACTION_CONTINUE && thread->isHalted ())
 	    {
-	      const vContTidAction &action = *act_it;
-
-	      if (action.matches (thread->tid ()))
-		{
-		  if (action.kind == ACTION_CONTINUE && thread->isHalted ())
-		    {
-		      doContinue (thread);
-		      markPendingStops (process, thread);
-		      return;
-		    }
-		}
+	      doContinue (thread);
+	      return;
 	    }
 	}
 
@@ -2537,7 +2514,7 @@ GdbServer::rspVCont ()
       if (rsp->getBreakCommand ())
 	{
 	  cerr << "INFO: Cntrl-C request from GDB client." << endl;
-	  rspSuspend (threadActions);
+	  rspSuspend ();
 	  return;
 	}
 
@@ -2585,65 +2562,73 @@ GdbServer::extractVContAction (const string &action)
 
 
 //-----------------------------------------------------------------------------
-//! Does a thread have a pending stop?
-
-//! This means that it stopped during a previous vCont but was not yet
-//! reported.
-
-//! @param[in] tid  Thread ID to consider
-//! @return  TRUE if the thread had a pending stop
-//-----------------------------------------------------------------------------
-bool
-GdbServer::pendingStop (int  tid)
-{
-  return mPendingStops.find (tid) != mPendingStops.end ();
-
-}	// pendingStop ()
-
-
-//-----------------------------------------------------------------------------
 //! Mark any pending stops
 
 //! At this point all threads should have been halted anyway. So we are
-//! looking to see if a thread has halted at a breakpoint. We are called from
-//! a thread which has dealt with a pending stop, so we should remote that
-//! thread ID from the list.
+//! looking to see if a thread has halted at a breakpoint.
 
 //! @todo  This assumes that in all-stop mode, all threads are restarted on
 //!        vCont. Will need refinement for non-stop mode.
 
-//! @param[in] process  The current process info structure
-//! @param[in] tid      The thread ID xto clear pending stop for.
+//! @param[in] reporting_thread      The thread we're reporting a stop for.
 //-----------------------------------------------------------------------------
 void
-GdbServer::markPendingStops (ProcessInfo* process, Thread *reporting_thread)
+GdbServer::markPendingStops (Thread *reporting_thread)
 {
+  ProcessInfo* process = mCurrentProcess;
+
   for (set <Thread*>::iterator it = process->threadBegin ();
        it != process->threadEnd ();
        it++)
     {
-      if ((*it != reporting_thread) && (BKPT_INSTR == getStopInstr (*it)))
-	mPendingStops.insert ((*it)->tid ());
+      Thread* thread = *it;
+
+      if (thread != reporting_thread
+	  && thread->lastAction () == ACTION_CONTINUE
+	  && !thread->isPending ())
+	{
+	  assert (thread->isHalted ());
+
+	  if (getStopInstr (thread) == BKPT_INSTR)
+	    {
+	      thread->setPending ();
+
+	      if (si->debugStopResume ())
+		cerr << "DebugStopResume: marking " << thread->tid () << " pending."
+		     << endl;
+	    }
+	  else
+	    {
+	      if (si->debugStopResume ())
+		cerr << "DebugStopResume: " << thread->tid () << " NOT pending."
+		     << endl;
+	    }
+	}
     }
 
-  removePendingStop (reporting_thread->tid ());
+  reporting_thread->clearPending ();
 
 }	// markPendingStops ()
 
 
 //-----------------------------------------------------------------------------
-//! Clear a pending stop
-
-//! Remove the specified threads from the set of pending stops
-
-//! @param[in] tid      The thread to remove
+//! Mark all threads as stopped from the client's perspective.
 //-----------------------------------------------------------------------------
 void
-GdbServer::removePendingStop (int  tid)
+GdbServer::markAllStopped ()
 {
-  mPendingStops.erase (tid);
+  ProcessInfo* process = mCurrentProcess;
 
-}	// removePendingStop ()
+  for (set <Thread*>::iterator it = process->threadBegin ();
+       it != process->threadEnd ();
+       it++)
+    {
+      Thread* thread = *it;
+
+      thread->setLastAction (ACTION_STOP);
+    }
+
+}	// markPendingStops ()
 
 
 //-----------------------------------------------------------------------------
@@ -2686,6 +2671,10 @@ GdbServer::doContinue (Thread* thread)
       if (TARGET_SIGNAL_NONE == sig)
 	sig = TARGET_SIGNAL_TRAP;
       rspReportException (thread, sig);
+
+      // At this point, no thread should be resumed until the client
+      // tells us to.
+      markAllStopped ();
     }
 }	// doContinue ()
 
@@ -3127,7 +3116,10 @@ GdbServer::resumeAllThreads ()
        it++)
     {
       Thread* thread = *it;
-      allResumed &= thread->resume ();
+
+      if (thread->lastAction () == ACTION_CONTINUE
+	  && !thread->isPending ())
+	allResumed &= thread->resume ();
     }
 
   return allResumed;
