@@ -478,6 +478,8 @@ GdbServer::rspReportException (Thread *thread, TargetSignal sig)
 
   markPendingStops (thread);
 
+  mCurrentThread = thread;
+
   pkt->packStr (oss.str ().c_str ());
   rsp->putPkt (pkt);
 
