@@ -256,7 +256,6 @@ private:
   void rspUnknownPacket ();
   void rspSetThread ();
   void rspReadMem ();
-  void rspWriteMem ();
   void rspReadReg ();
   void rspWriteReg ();
   void rspQuery ();
