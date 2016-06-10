@@ -58,6 +58,7 @@
 
 using std::string;
 using std::map;
+using std::vector;
 
 
 class Thread;
@@ -95,6 +96,12 @@ public:
     TARGET_SIGNAL_PIPE = 13,
     TARGET_SIGNAL_ALRM = 14,
     TARGET_SIGNAL_TERM = 15,
+  };
+
+  enum vContAction
+  {
+    ACTION_STOP,
+    ACTION_CONTINUE,
   };
 
   // Public architectural constants. Must be consistent with the target
@@ -147,6 +154,24 @@ public:
 
 
 private:
+
+  // A tuple representing a vCont action and the TID it applies to.
+  struct vContTidAction
+  {
+    // The thread the action applies to.
+    int tid;
+
+    // The action.
+    vContAction kind;
+
+    // True if this action applies to thread TID.
+    bool matches (int tid) const
+    {
+      return (this->tid == -1 || this->tid == tid);
+    }
+  };
+
+  typedef vector <vContTidAction> vContTidActionVector;
 
   //! Maximum size of RSP packet. Enough for all the registers as hex
   //! characters (8 per reg) + 1 byte end marker.
@@ -252,7 +277,7 @@ private:
   void rspIsThreadAlive ();
   void rspVpkt ();
   void rspVCont ();
-  char extractVContAction (string action);
+  vContAction extractVContAction (const string &action);
   bool pendingStop (int  tid);
   void markPendingStops (ProcessInfo* process,
 			 int          tid);
@@ -274,8 +299,8 @@ private:
 
   // Accessors for processes and threads
   ProcessInfo * getProcess (int  pid);
-  Thread * getThread (int         tid,
-		      const char* mess = NULL);
+  Thread* getThread (int tid);
+
   //! Thread control
   bool haltAllThreads ();
   bool resumeAllThreads ();
