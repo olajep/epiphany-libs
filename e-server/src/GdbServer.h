@@ -268,8 +268,6 @@ private:
   void rspReadReg ();
   void rspWriteReg ();
   void rspQuery ();
-  void rspQThreadInfo (bool isFirst);
-  void rspQThreadExtraInfo ();
   string rspThreadExtraInfo (Thread* thread);
   void rspCommand ();
   void rspCmdWorkgroup (char* cmd);
