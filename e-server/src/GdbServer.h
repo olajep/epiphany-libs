@@ -244,6 +244,9 @@ private:
   //! String for OS mesh traffic
   string  osTrafficReply;
 
+  //! String for qXfer:threads
+  string qXferThreadsReply;
+
   // Helper functions for setting up a connection
   void initProcesses ();
   bool haltAndActivateProcess (ProcessInfo *process);
@@ -267,6 +270,7 @@ private:
   void rspQuery ();
   void rspQThreadInfo (bool isFirst);
   void rspQThreadExtraInfo ();
+  string rspThreadExtraInfo (Thread* thread);
   void rspCommand ();
   void rspCmdWorkgroup (char* cmd);
   void rspCmdProcess (char* cmd);
@@ -278,6 +282,7 @@ private:
 			  makeTransferReplyFtype maker,
 			  unsigned int offset,
 			  unsigned int length);
+  string rspMakeTransferThreadsReply ();
   string rspMakeOsDataReply ();
   string rspMakeOsDataProcessesReply ();
   string rspMakeOsDataLoadReply ();
