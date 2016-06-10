@@ -74,6 +74,8 @@ public:
   bool checkHwAddr () const;
   void haltOnAttach (const bool _haltOnAttachFlag);
   bool haltOnAttach () const;
+  void multiProcess (const bool _multiProcessFlag);
+  bool multiProcess () const;
 
 private:
 
@@ -115,6 +117,7 @@ private:
   bool skipPlatformResetFlag;           //!< Don't reset on init
   bool checkHwAddrFlag;			//!< Check HW address when used
   bool haltOnAttachFlag;		//!< Don't halt processor when attaching
+  bool multiProcessFlag;		//!< Multiprocess model
 
 };	// ServerInfo
 

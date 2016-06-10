@@ -52,6 +52,7 @@ Thread::Thread (CoreId         coreId,
 		TargetControl* target,
 		ServerInfo*    si,
 		int            tid) :
+  mProcess (NULL),
   mCoreId (coreId),
   mTarget (target),
   mSi (si),
