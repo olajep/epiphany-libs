@@ -92,6 +92,7 @@ public:
   bool isConnected ();
 
   // Public interface: get packets from the stream and put them out
+  bool inputReady ();
   bool getPkt (RspPacket * pkt);
   bool putPkt (RspPacket * pkt);
 

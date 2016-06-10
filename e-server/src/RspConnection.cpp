@@ -610,6 +610,30 @@ RspConnection::getRspChar ()
   return false;			// shouldn't get here anyway!
 }				// getRspChar()
 
+bool
+RspConnection::inputReady ()
+{
+  fd_set readfds;
+  int res;
+  struct timeval zero = {};
+
+  FD_ZERO (&readfds);
+  FD_SET (clientFd, &readfds);
+
+  do
+    {
+      res = select (clientFd + 1, &readfds, NULL, NULL, &zero);
+    }
+  while (res == -1 && errno == EINTR);
+
+  if (res == 0)
+    return false;
+
+  if (FD_ISSET (clientFd, &readfds))
+    return true;
+
+  return false;
+}
 
 //-----------------------------------------------------------------------------
 //! Check if there is an out-of-band BREAK command on the serial link.
@@ -619,64 +643,31 @@ RspConnection::getRspChar ()
 bool
 RspConnection::getBreakCommand ()
 {
-  int flags;
-
-  // Set socket non-blocking
-  if ((flags = fcntl (clientFd, F_GETFL, 0)) < 0)
-    {
-      cerr << "Warning: getBreakCommand: fcntl initial get flags: "
-	   << strerror (errno) << "." << endl;
-      return  false;
-    }
-
-  if (fcntl (clientFd, F_SETFL, flags | O_NONBLOCK) < 0)
-    {
-      cerr << "Warning: getBreakCommand fcntl set non-blocking: "
-	   << strerror (errno) << "." << endl;
-      return  false;
-    }
+  if (!inputReady ())
+    return false;
 
   unsigned char c;
-  bool gotChar = false;
+  int n;
 
-  while (!gotChar)
+  do
     {
-      int n = read (clientFd, &c, sizeof (c));
+      n = read (clientFd, &c, sizeof (c));
+    }
+  while (n == -1 && errno == EINTR);
 
-      switch (n)
-	{
-	case -1:
-	  if (EINTR == errno)
-	    break;		// Retry
-	  else
-	    return false;	// Not necessarily serious could be temporary
+  switch (n)
+    {
+    case -1:
+      return false;		// Not necessarily serious could be temporary
 				// unavailable resource.
-	case 0:
-	  return false;		// No break character there
+    case 0:
+      return false;		// No break character there
 
-	default:
-	  gotChar = true;
-	}
+    default:
+      // @todo Not sure this is really right. What other characters are we
+      //       throwing away if it is not 0x03?
+      return (c == 0x03);
     }
-
-  // Set socket to blocking
-
-  if ((flags = fcntl (clientFd, F_GETFL, 0)) < 0)
-    {
-      cerr << "Error: fcntl get" << strerror (errno) << endl;
-      return false;
-    }
-
-
-  if (fcntl (clientFd, F_SETFL, flags & (~O_NONBLOCK)) < 0)
-    {
-      cerr << "Error: fcntl set blocking" << strerror (errno) << endl;
-      return false;
-    }
-
-  // @todo Not sure this is really right. What other characters are we
-  //       throwing away if it is not 0x03?
-  return (gotChar && (c == 0x03));
 }
 
 
