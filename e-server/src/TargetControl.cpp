@@ -86,4 +86,10 @@ TargetControl::endOfBaudMeasurement ()
 
 }	// endOfBaudMeasurement
 
+bool
+TargetControl::isValidAddr (uint32_t  addr) const
+{
+  return (isLocalAddr (addr) || isExternalMem (addr) || isCoreMem (addr));
+}	// isValidAddr ();
+
 

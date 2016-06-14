@@ -987,6 +987,15 @@ Thread::regAddr (unsigned int  regnum) const
 
 }	// regAddr ()
 
+bool
+Thread::isValidPc(uint32_t pc) const
+{
+  if (pc & 1)
+    return false;
+
+  return mTarget->isValidAddr(pc);
+}
+
 
 // Local Variables:
 // mode: C++

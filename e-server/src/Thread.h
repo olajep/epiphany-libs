@@ -73,7 +73,7 @@ public:
   void setProcess (ProcessInfo* process) { mProcess = process; }
 
   GdbServer::TargetSignal pendingSignal () const { return mPendingSignal; }
-  void setPendingSignal (GdbServer::TargetSignal sig) { mPendingSignal = sig; }
+  void setPendingSignal (GdbServer::TargetSignal sig){ mPendingSignal = sig; }
 
   void setLastAction (GdbServer::vContAction last) { mLastAction = last; }
   GdbServer::vContAction lastAction () const { return mLastAction; }
@@ -126,6 +126,7 @@ public:
   CoreId readCoreId () const;
   uint32_t readStatus () const;
   uint32_t readPc () const;
+  bool isValidPc(uint32_t pc) const;
   void writePc (uint32_t addr);
   uint32_t readLr () const;
   void writeLr (uint32_t addr);
