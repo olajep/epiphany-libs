@@ -645,6 +645,22 @@ TargetControlHardware::isLocalAddr (uint32_t  addr) const
 
 }	// isLocalAddr ();
 
+bool
+TargetControlHardware::isExternalMem (uint32_t addr) const
+{
+  return (m_emem.ephy_base <= addr
+	  && addr - m_emem.ephy_base < m_emem.emap_size);
+}	// isExternalMem ();
+
+bool
+TargetControlHardware::isCoreMem (uint32_t  addr) const
+{
+  uint32_t row, col, offset;
+
+  return addrToCoords(addr, row, col, offset);
+
+}	// isCoreMem ();
+
 
 //! Initialize the hardware platform
 
