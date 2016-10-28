@@ -145,6 +145,14 @@ Thread::isHalted ()
       mDebugState = DEBUG_HALTED;
       return true;
     }
+  else if (getException () != GdbServer::TARGET_SIGNAL_NONE)
+    {
+      //! @todo Verify that there is a valid ISR entry in IVT and that
+      //  exception interrupt is not masked. If so, ignore exception, and let
+      //  ISR handle it.
+
+      return halt ();
+    }
   else
     {
       mDebugState = DEBUG_RUNNING;
