@@ -1,5 +1,10 @@
 2016-10-31  Ola Jeppsson  <ola@adapteva.com>
 
+	* src/RspConnection.cpp (RspConnection::inputReady): Add 1 ms timeout
+	for remote data.
+
+2016-10-31  Ola Jeppsson  <ola@adapteva.com>
+
 	* src/GdbServer.cpp (GdbServer::rspVpkt): Defer 'vCtrlC' packet to
 	rspVCtrlC.
 	(GdbServer::rspVCtrlC): Added. Handle 'VCtrlC' packet.

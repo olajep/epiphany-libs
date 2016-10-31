@@ -675,14 +675,14 @@ RspConnection::inputReady ()
 {
   fd_set readfds;
   int res;
-  struct timeval zero = {};
+  struct timeval timeout = { 0, 1000 /* us */ };
 
   FD_ZERO (&readfds);
   FD_SET (clientFd, &readfds);
 
   do
     {
-      res = select (clientFd + 1, &readfds, NULL, NULL, &zero);
+      res = select (clientFd + 1, &readfds, NULL, NULL, &timeout);
     }
   while (res == -1 && errno == EINTR);
 
