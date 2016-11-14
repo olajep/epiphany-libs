@@ -1,5 +1,10 @@
 2016-11-14  Ola Jeppsson  <ola@adapteva.com>
 
+	* src/GdbServer.cpp (GdbServer::findStopReason): Let
+	exception take precedence over bkpt.
+
+2016-11-14  Ola Jeppsson  <ola@adapteva.com>
+
 	* src/ServerInfo.cpp (ServerInfo::skipPlatformReset): Remove
 	function.
 	* src/ServerInfo.h (ServerInfo) <skipPlatformResetFlag>: Remove

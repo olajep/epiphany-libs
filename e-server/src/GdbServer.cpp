@@ -2879,6 +2879,7 @@ GdbServer::findStopReason (Thread *thread)
 {
   uint32_t pc;
   uint16_t instr16;
+  TargetSignal sig = TARGET_SIGNAL_NONE;;
 
   assert (thread->isHalted ());
   assert (thread->pendingSignal () == TARGET_SIGNAL_NONE);
@@ -2893,6 +2894,9 @@ GdbServer::findStopReason (Thread *thread)
   if (pc >= SHORT_INSTRLEN)
     pc -= SHORT_INSTRLEN;
 
+  // Did we get an exception?
+  sig = thread->getException ();
+
   // See if we just hit a breakpoint or IDLE. Fortunately IDLE, BREAK,
   // TRAP and NOP are all 16-bit instructions.
   instr16 = thread->readMem16 (pc);
@@ -2901,10 +2905,11 @@ GdbServer::findStopReason (Thread *thread)
     {
       // Decrement PC ourselves -- we support the "T05 swbreak" stop reason.
       thread->writePc (pc);
-      return TARGET_SIGNAL_TRAP;
-    }
 
-  TargetSignal sig = thread->getException ();
+      // Let exception from above take precedence as stop reason
+      if (sig == TARGET_SIGNAL_NONE)
+	sig = TARGET_SIGNAL_TRAP;
+    }
 
   if (sig != TARGET_SIGNAL_NONE)
     return sig;
