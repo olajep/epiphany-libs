@@ -119,13 +119,21 @@ static void clear_sram(e_epiphany_t *dev,
 {
 	unsigned i, j;
 	size_t sram_size;
-	void *empty;
+	uint8_t *empty;
+	const size_t ivt_size = 0x28;
+	const uint32_t bkpt_insn = 0x01a201c2; /* bkpt; nop; */
 
 	/* Assume one chip type */
 	sram_size = e_platform.chip[0].sram_size;
 
 	empty = alloca(sram_size);
-	memset(empty, 0, sram_size);
+
+	/* Fill IVT with breakpoints */
+	for (i = 0; i < ivt_size; i += 4)
+		memcpy(&empty[i], &bkpt_insn, sizeof(bkpt_insn));
+
+	/* Clear rest of memory */
+	memset(&empty[ivt_size], 0, sram_size - ivt_size);
 
 	for (i = row; i < row + rows; i++)
 		for (j = col; j < col + cols; j++)
